@@ -67,7 +67,7 @@ export default function PollCreatePage() {
       rewards: [],
       targetGeo: { countries: [], states: [], cities: [] },
       resourceAssets: [],
-      expireRewardAt: "",
+      expireRewardAt: null,
     }),
     [],
   );

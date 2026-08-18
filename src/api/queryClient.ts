@@ -2,12 +2,14 @@ import { appToast } from "@/utils/toast";
 import { QueryClient, QueryFunctionContext } from "@tanstack/react-query";
 import axios from "axios";
 import { endpoints } from "./endpoints";
+import { sandboxAdapter } from "@/sandbox/mock-api"; // sandbox: routes all requests to fixtures instead of the real backend
 
 export const BASE_URL = import.meta.env.VITE_BACKEND_URL || "";
 
 const apiInstance = axios.create({
   baseURL: BASE_URL,
   withCredentials: true,
+  adapter: sandboxAdapter, // sandbox: intercept at the transport layer, no callers touched
 });
 
 apiInstance.interceptors.response.use(

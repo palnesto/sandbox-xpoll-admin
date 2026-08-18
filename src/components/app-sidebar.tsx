@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import xOctopus from "@/assets/sidebar.png";
 import inkd from "@/assets/inkd.png";
+import inkTransitionVideo from "@/assets/inkdbg.mp4"; // sandbox: real src is an unreachable prod-storage.xpoll.io URL; swapped to the local asset already used for this same transition elsewhere in the app
 import { NavMain } from "@/components/nav-main";
 import { NavUser } from "@/components/nav-user";
 import {
@@ -412,7 +413,7 @@ export function AppSidebar({ ...props }: ComponentProps<typeof Sidebar>) {
           onClick={completeInkNavigation}
         >
           <video
-            src="https://prod-storage.xpoll.io/xpoll-blob-dump-user/ink.mp4"
+            src={inkTransitionVideo}
             autoPlay
             muted
             playsInline
