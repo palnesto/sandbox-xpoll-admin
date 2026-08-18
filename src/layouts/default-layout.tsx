@@ -1,0 +1,48 @@
+import { ReactNode } from "react";
+import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { AppSidebar } from "@/components/app-sidebar";
+import DotGrid from "@/components/DotGrid";
+import { cn } from "@/lib/utils";
+import { Spotlight } from "@/components/ui/spotlight-new";
+
+// responsibility: To provide a default layout for the app
+export default function DefaultLayout({ children }: { children: ReactNode }) {
+  return (
+    <div className="min-h-screen flex flex-col">
+      <SidebarProvider>
+        <AppSidebar />
+        <SidebarInset>
+          <div className="rounded-r-lg p-3 bg-sidebar">
+            <div className="relative rounded-lg min-h-[97.7dvh] max-h-[97.7dvh] overflow-hidden bg-black">
+              <div className="absolute inset-0 rotate-[0deg] -translate-x-[0%] translate-y-[60dvh]">
+                <Spotlight />
+              </div>
+              <div
+                className={cn(
+                  "absolute h-full w-full translate-y-[50%] scale-[2]"
+                )}
+              ></div>
+              <div className="absolute inset-0 z-0">
+                <DotGrid
+                  dotSize={3}
+                  gap={30}
+                  baseColor="#18181B"
+                  activeColor="#18181B"
+                  proximity={0}
+                  shockRadius={0}
+                  shockStrength={0}
+                  resistance={750}
+                  returnDuration={1.5}
+                />
+              </div>
+
+              <div className="min-h-[97.7dvh] max-h-[97.7dvh] overflow-y-auto relative p-4">
+                {children}
+              </div>
+            </div>
+          </div>
+        </SidebarInset>
+      </SidebarProvider>
+    </div>
+  );
+}

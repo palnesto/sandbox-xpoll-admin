@@ -1,0 +1,566 @@
+import { useCallback, useMemo, useRef, useState } from "react";
+import {
+  Search,
+  LayoutGrid,
+  List, 
+  ArrowUp,
+  ArrowDown,
+} from "lucide-react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
+import { useApiQuery } from "@/hooks/useApiQuery";
+import { useApiMutation } from "@/hooks/useApiMutation";
+import { endpoints } from "@/api/endpoints";
+import ListingPagination from "@/components/commons/listing-pagination";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { AgentLogsSection } from "@/components/inkd/agent-logs-section";
+import { amount, unwrapString } from "@/utils/currency-assets/base";
+import { assetSpecs, type AssetType } from "@/utils/currency-assets/asset";
+import inkPlaceholder from "@/assets/fallback.png";
+import inkd from "@/assets/ink.svg";
+import { queryClient } from "@/api/queryClient";
+
+const BASE_URL = endpoints.entities.inkd.blogs.advancedListings;
+const PAGE_SIZE = 20;
+
+type RewardLeg = {
+  assetId: string;
+  rewardAmountCap: string;
+  currentDistribution: string;
+  rewardLeft: string;
+};
+
+type BlogEntry = {
+  _id: string;
+  title: string;
+  description: string;
+  uploadedImageLinks: string[];
+  uploadedVideoLinks: string[];
+  ytVideoLinks: string[];
+  inkDInternalAgentFallbackImage?: string | null;
+  reviewVote: "upvote" | "downvote" | null;
+  totalActiveTrials: number;
+  createdAt: string;
+  archivedAt: string | null;
+  rewardsAlignment?: {
+    activeTrialsOnly?: RewardLeg[];
+    nonActiveTrialsIncluded?: RewardLeg[];
+  };
+};
+
+type ViewMode = "cards" | "rows";
+type AgentDetail = {
+  _id: string;
+  status?: string | null;
+};
+
+const INKD_AGENT_DETAILS_VIEW_KEY = "inkd-agent-details-blog-view";
+
+/** Convert base amount to parent for display (same as allActions baseToParent). */
+function baseToParentDisplay(
+  assetId: AssetType,
+  baseVal: string | number,
+  fixed?: number,
+): string {
+  const useFixed = typeof fixed === "number";
+  return unwrapString(
+    amount({
+      op: "toParent",
+      assetId,
+      value: String(baseVal),
+      output: "string",
+      trim: useFixed ? false : true,
+      fixed: useFixed ? Math.max(0, fixed) : undefined,
+      group: false,
+    }),
+    "0",
+  );
+}
+
+function RewardChips({ legs }: { legs: RewardLeg[] }) {
+  if (!legs.length) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-x-[14px] gap-y-[6px] text-[11px] text-[#6b6b74]">
+      {legs.map((leg) => {
+        const spec = assetSpecs[leg.assetId as AssetType];
+        const converted = baseToParentDisplay(leg.assetId as AssetType, leg.rewardAmountCap);
+        return (
+          <span key={leg.assetId} className="inline-flex items-center gap-1.5 bg-[#F2F3F5] rounded-sm px-2 py-1">
+            {spec?.img ? (
+              <img
+                src={spec.img}
+                alt={spec.parentSymbol}
+                className="h-3.5 w-3.5 rounded-full object-contain"
+              />
+            ) : null}
+            {converted} {spec?.parent ?? leg.assetId}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function getBlogMedia(blog: BlogEntry): string {
+  if (blog.uploadedImageLinks?.length) return blog.uploadedImageLinks[0];
+  if (blog.uploadedVideoLinks?.length) return blog.uploadedVideoLinks[0];
+  if (blog.ytVideoLinks?.length) return blog.ytVideoLinks[0];
+  if (blog.inkDInternalAgentFallbackImage)
+    return blog.inkDInternalAgentFallbackImage;
+  return inkPlaceholder;
+}
+
+function getStoredView(): ViewMode {
+  try {
+    const stored = localStorage.getItem(INKD_AGENT_DETAILS_VIEW_KEY);
+    if (stored === "cards" || stored === "rows") return stored;
+  } catch {
+    // ignore
+  }
+  return "cards";
+}
+
+export default function InkdInternalAgentDetailsPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const { inkdInternalAgentId } = useParams();
+  const agentName =
+    (location.state as { agentName?: string } | null)?.agentName?.trim() ||
+    "chart";
+  const [view, setViewState] = useState<ViewMode>(getStoredView);
+  const setView = useCallback((next: ViewMode) => {
+    setViewState(next);
+    try {
+      localStorage.setItem(INKD_AGENT_DETAILS_VIEW_KEY, next);
+    } catch {
+      // ignore
+    }
+  }, []);
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [manualLaunchOpen, setManualLaunchOpen] = useState(false);
+  const lastLaunchAttemptAtRef = useRef(0);
+
+  const listQueryKey = useMemo(
+    () => ["inkd-blogs-advanced", inkdInternalAgentId, page, query],
+    [inkdInternalAgentId, page, query],
+  );
+
+  const urlWithQuery = useMemo(() => {
+    const params = new URLSearchParams({
+      page: String(page),
+      pageSize: String(PAGE_SIZE),
+    });
+    if (inkdInternalAgentId) {
+      params.set("createdByInkdInternalAgentId", inkdInternalAgentId);
+    }
+    const q = query.trim();
+    if (q) params.set("q", q);
+    return `${BASE_URL}?${params.toString()}`;
+  }, [page, inkdInternalAgentId, query]);
+
+  const { data, isLoading } = useApiQuery(urlWithQuery, {
+    queryKey: listQueryKey,
+    enabled: !!inkdInternalAgentId,
+  } as any);
+  const agentRoute = inkdInternalAgentId
+    ? endpoints.entities.inkd.internalAgent.getById(inkdInternalAgentId)
+    : "";
+  const { data: agentData } = useApiQuery(agentRoute, {
+    queryKey: ["inkd-internal-agent", inkdInternalAgentId],
+    enabled: !!inkdInternalAgentId,
+  } as any);
+
+  const payload = data?.data?.data ?? {};
+  const agent = (agentData?.data?.data ?? null) as AgentDetail | null;
+  const isAgentActive = String(agent?.status ?? "").toLowerCase() === "active";
+  const entries: BlogEntry[] = Array.isArray(payload.entries)
+    ? payload.entries
+    : [];
+  const meta = payload.meta ?? {};
+  const totalPages =
+    typeof meta.totalPages === "number" && meta.totalPages > 0
+      ? meta.totalPages
+      : Math.max(1, Math.ceil((meta.total || 1) / PAGE_SIZE));
+  const currentPage =
+    typeof meta.page === "number" && meta.page > 0 ? meta.page : page;
+
+  const handleCompletedLogDetected = useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: listQueryKey });
+  }, [queryClient, listQueryKey]);
+
+  const { mutate: launchManualRun, isPending: isManualLaunchPending } =
+    useApiMutation<Record<string, never>, unknown>({
+      route: endpoints.entities.inkd.internalAgent.manualRun(
+        inkdInternalAgentId ?? "",
+      ),
+      method: "POST",
+      onSuccess: () => {
+        setManualLaunchOpen(false);
+        queryClient.invalidateQueries({
+          queryKey: ["inkd-agent-logs", inkdInternalAgentId],
+        });
+      },
+    });
+
+  const handleConfirmManualLaunch = useCallback(() => {
+    if (!inkdInternalAgentId || isManualLaunchPending) return;
+
+    const now = Date.now();
+    if (now - lastLaunchAttemptAtRef.current < 800) return;
+    lastLaunchAttemptAtRef.current = now;
+
+    launchManualRun({});
+  }, [inkdInternalAgentId, isManualLaunchPending, launchManualRun]);
+
+  const goToBlog = (blogId: string) => {
+    navigate(
+      `/inkd/inkd-internal-agents/details/${inkdInternalAgentId}/inkd-blogs/details/${blogId}`,
+    );
+  };
+
+  const getRewardLegs = (blog: BlogEntry): RewardLeg[] =>
+    blog.rewardsAlignment?.activeTrialsOnly ??
+    blog.rewardsAlignment?.nonActiveTrialsIncluded ??
+    [];
+
+  const formatDate = (iso: string) => {
+    const d = new Date(iso);
+    const now = new Date();
+    const diff = now.getTime() - d.getTime();
+    if (diff < 86_400_000) return "Today";
+    if (diff < 172_800_000) return "Yesterday";
+    return d.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    });
+  };
+
+  return (
+    <div className="w-full 2xl:px-7 pb-8 pt-3 hidden lg:block">
+      <div className="mb-5 flex items-center justify-between gap-4">
+        <div className="relative w-full flex h-[54px] items-center rounded-[28px] bg-white px-4 shadow-[0_1px_0_rgba(255,255,255,0.75)_inset]"> 
+          <img src={inkd} alt="search" className="mr-3 h-5 text-[#6C63E5]" />
+          <input
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setPage(1);
+            }}
+            placeholder={`Search the ${agentName}`}
+            className="h-full flex-1 bg-transparent text-[14px] font-normal text-[#353535] outline-none placeholder:text-[#b8b8c2]"
+          />
+          <div className="flex h-[34px] w-[58px] items-center justify-center rounded-full bg-[#e1e1e1]">
+            <Search size={13} className="text-[#5649FF]" />
+          </div>
+        </div>
+
+        <div className="flex items-center gap-3 mr-7">
+          {isAgentActive ? (
+            <button
+              type="button"
+              onClick={() => setManualLaunchOpen(true)}
+              disabled={!inkdInternalAgentId}
+              className="inline-flex h-[42px] shrink-0 items-center rounded-full bg-[#5b4df7] px-4 text-[12px] font-medium text-white shadow-[0_10px_25px_rgba(107,99,246,0.22)] transition hover:bg-[#5d55ef] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Manual Launch
+            </button>
+          ) : null}
+          
+          <div className="flex h-[48px] items-center rounded-full bg-[#eef0f2] p-[4px] shadow-[0_1px_0_rgba(255,255,255,0.8)_inset]">
+            <button
+              type="button"
+              onClick={() => setView("cards")}
+              className={`flex h-[40px] w-[52px] items-center justify-center rounded-full transition ${view === "cards"
+                  ? "bg-white text-[#6b63f6] shadow-[0_2px_10px_rgba(0,0,0,0.05)]"
+                  : "text-[#8f8f98]"
+                }`}
+            >
+              <LayoutGrid size={17} strokeWidth={2} />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setView("rows")}
+              className={`flex h-[40px] w-[52px] items-center justify-center rounded-full transition ${view === "rows"
+                  ? "bg-white text-[#6b63f6] shadow-[0_2px_10px_rgba(0,0,0,0.05)]"
+                  : "text-[#8f8f98]"
+                }`}
+            >
+              <List size={17} strokeWidth={2} />
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <AgentLogsSection
+        inkdInternalAgentId={inkdInternalAgentId}
+        onCompletedLogDetected={handleCompletedLogDetected}
+      />
+
+      {isLoading ? (
+        <p className="py-20 text-center text-neutral-400">Loading blogs…</p>
+      ) : entries.length === 0 ? (
+        <p className="py-20 text-center text-neutral-400">
+          No blogs found for this agent.
+        </p>
+      ) : view === "cards" ? (
+        <div className="grid gap-4 grid-cols-2">
+          {entries.map((blog) => {
+            const media = getBlogMedia(blog);
+            const legs = getRewardLegs(blog);
+            return (
+              <div
+                key={blog._id}
+                onClick={() => goToBlog(blog._id)}
+                className="overflow-hidden rounded-[22px] bg-white p-[8px] text-left shadow-[0_1px_0_rgba(255,255,255,0.9)_inset] cursor-pointer hover:-translate-y-0.5 transition-all duration-300 hover:shadow-[0_4px_10px_rgba(0,0,0,0.1)]"
+              >
+                <div className="relative h-[200px] w-full overflow-hidden rounded-[18px]">
+                  <img
+                    src={media}
+                    alt={blog.title}
+                    className="h-full w-full object-cover"
+                  />
+                </div>
+
+                <div className="px-[8px] pb-[4px] pt-[12px]">
+                  <h3 className="line-clamp-2 min-h-[58px] text-[16px] font-normal leading-[1.35] tracking-[-0.02em] text-black">
+                    {blog.title}
+                  </h3>
+
+                  {legs.length > 0 && (
+                    <div className="mt-[7px] rounded-[12px] bg-[#F8F9FA] px-[10px] py-[9px]">
+                      <div className="mb-[6px] text-[10px] font-semibold uppercase text-black">
+                        🎁 Rewards
+                      </div>
+                      <RewardChips legs={legs} />
+                    </div>
+                  )}
+
+                  <div className="mt-[12px] flex items-center gap-[8px]">
+                    <div className="flex h-[28px] min-w-[72px] items-center justify-center rounded-full bg-[#eeeeef] px-3 text-[12px] text-[#75757e]">
+                      {blog.totalActiveTrials ?? 0} Trails
+                    </div>
+
+                    <div className="flex h-[28px] min-w-[72px] items-center justify-center rounded-full bg-[#eeeeef] px-3 text-[12px] text-[#75757e]">
+                      {formatDate(blog.createdAt)}
+                    </div>
+
+                    <VotePills
+                      blogId={blog._id}
+                      reviewVote={blog.reviewVote}
+                      listQueryKey={listQueryKey}
+                    />
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="overflow-hidden rounded-[18px] bg-[#f8f8f8] shadow-[0_1px_0_rgba(255,255,255,0.8)_inset]">
+          <div className="grid grid-cols-[140px_minmax(0,1fr)_180px_120px_44px] items-center gap-0 border-b border-[#ededed] px-6 py-4">
+            <div className="text-[14px] font-medium text-[#1e1e22]">Image</div>
+            <div className="text-[14px] font-medium text-[#1e1e22]">
+              Blog name
+            </div>
+            <div className="text-[14px] font-medium text-[#1e1e22]">
+              Rewards
+            </div>
+            <div className="text-[14px] font-medium text-[#1e1e22]">Vote</div>
+            <div />
+          </div>
+
+          {entries?.map((blog, index) => {
+            const media = getBlogMedia(blog);
+            const legs = getRewardLegs(blog);
+            return (
+              <div
+                key={blog._id}
+                onClick={() => goToBlog(blog._id)}
+                className={`grid w-full grid-cols-[140px_minmax(0,1fr)_180px_120px_44px] items-center gap-0 px-6 py-4 text-left transition hover:bg-[#f2f2f3] cursor-pointer ${index !== entries.length - 1
+                    ? "border-b border-[#ededed]"
+                    : ""
+                  }`}
+              >
+                <div>
+                  <img
+                    src={media}
+                    alt={blog.title}
+                    className="h-[52px] w-[96px] rounded-[12px] object-cover"
+                  />
+                </div>
+
+                <div className="pr-6">
+                  <div className="max-w-[360px] text-[14px] font-normal leading-[1.3] text-[#232327]">
+                    {blog.title}
+                  </div>
+                </div>
+
+                <div className="pr-4">
+                  {legs.length > 0 ? (
+                    <div className="flex flex-col gap-0.5 overflow-y-scroll">
+                      {legs.slice(0, 2).map((leg) => {
+                        const spec = assetSpecs[leg.assetId as AssetType];
+                        const converted = baseToParentDisplay(
+                          leg.assetId as AssetType,
+                          leg.rewardAmountCap,
+                        );
+                        return (
+                          <span
+                            key={leg.assetId}
+                            className="inline-flex items-center gap-1 text-[12px] text-[#6b6b74]"
+                          >
+                            {spec?.img && (
+                              <img
+                                src={spec.img}
+                                alt={spec.parentSymbol}
+                                className="h-3 w-3 rounded-full object-contain"
+                              />
+                            )}
+                            {converted} {spec?.parentSymbol ?? leg.assetId}
+                          </span>
+                        );
+                      })}
+                      {legs.length > 2 && (
+                        <span className="text-[11px] text-[#999]">
+                          +{legs.length - 2} more
+                        </span>
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-[12px] text-[#999]">—</span>
+                  )}
+                </div>
+
+                <div>
+                  <VotePills
+                    blogId={blog._id}
+                    reviewVote={blog.reviewVote}
+                    listQueryKey={listQueryKey}
+                  />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {totalPages > 1 && (
+        <ListingPagination
+          page={currentPage}
+          totalPages={totalPages}
+          onPageChange={setPage}
+          variant="primary"
+          className="sticky bottom-0 left-0 mt-10 flex w-fit mx-auto justify-center rounded-2xl bg-background py-4 shadow-md"
+        />
+      )}
+
+      <AlertDialog
+        open={manualLaunchOpen}
+        onOpenChange={(nextOpen) => {
+          if (isManualLaunchPending) return;
+          setManualLaunchOpen(nextOpen);
+        }}
+      >
+        <AlertDialogContent className="max-w-[420px] rounded-[24px] border border-[#ececf4] bg-white p-6">
+          <AlertDialogHeader className="space-y-2 text-left">
+            <AlertDialogTitle className="text-[20px] font-semibold text-[#1e1e22]">
+              Launch manual run?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-[13px] leading-6 text-[#6a6a75]">
+              Are you sure you want to launch this agent manually?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+
+          <AlertDialogFooter className="mt-2 flex-row justify-end gap-3 space-x-0">
+            <AlertDialogCancel
+              disabled={isManualLaunchPending}
+              className="mt-0 h-[42px] rounded-full border border-[#e4e5ec] bg-white px-5 text-[13px] text-[#4b4b56] shadow-none hover:bg-[#f5f6fa] hover:text-[#1f2430]"
+            >
+              Cancel
+            </AlertDialogCancel>
+
+            <AlertDialogAction
+              disabled={isManualLaunchPending}
+              onClick={(event) => {
+                event.preventDefault();
+                handleConfirmManualLaunch();
+              }}
+              className="h-[42px] rounded-full bg-[#6b63f6] px-5 text-[13px] text-white hover:bg-[#5d55ef] disabled:pointer-events-none disabled:opacity-60"
+            >
+              {isManualLaunchPending ? "Launching..." : "Launch"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+function VotePills({
+  blogId,
+  reviewVote,
+  listQueryKey,
+}: {
+  blogId: string;
+  reviewVote: "upvote" | "downvote" | null;
+  listQueryKey: (string | number | undefined)[];
+}) {
+  const queryClient = useQueryClient();
+
+  const { mutate: castVote, isPending } = useApiMutation<
+    { reviewVote: "upvote" | "downvote" | null },
+    unknown
+  >({
+    route: endpoints.entities.inkd.blogs.reviewVote(blogId),
+    method: "PATCH",
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: listQueryKey });
+    },
+  });
+
+  const handleVote = (e: React.MouseEvent, vote: "upvote" | "downvote") => {
+    e.stopPropagation();
+    if (isPending) return;
+    castVote({ reviewVote: reviewVote === vote ? null : vote });
+  };
+
+  return (
+    <div className="ml-auto flex items-center gap-[8px]">
+      <button
+        type="button"
+        disabled={isPending}
+        onClick={(e) => handleVote(e, "upvote")}
+        className={`flex h-[28px] w-[58px] items-center justify-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-70 ${reviewVote === "upvote"
+            ? "bg-[#7078e6] text-white"
+            : "bg-[#dedede] text-[#555]"
+          }`}
+      >
+        <ArrowUp size={13} strokeWidth={2.5} />
+      </button>
+
+      <button
+        type="button"
+        disabled={isPending}
+        onClick={(e) => handleVote(e, "downvote")}
+        className={`flex h-[28px] w-[58px] items-center justify-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-70 ${reviewVote === "downvote"
+            ? "bg-[#ff5a36] text-white"
+            : "bg-[#dedede] text-[#555]"
+          }`}
+      >
+        <ArrowDown size={13} strokeWidth={2.5} />
+      </button>
+    </div>
+  );
+}
