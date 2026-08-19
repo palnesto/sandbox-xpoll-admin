@@ -8,9 +8,28 @@ export default defineConfig(({ mode }: ConfigEnv) => {
   return {
     plugins: [react(), Pages()],
     resolve: {
-      alias: {
-        "@": path.resolve(__dirname, "./src"),
-      },
+      alias: [
+        { find: "@", replacement: path.resolve(__dirname, "./src") },
+        // sandbox: redirect web3/wallet SDK entry points to local stubs so the app
+        // never opens real wallet/RPC/WalletConnect connections. Exact-match regexes
+        // so subpath imports (e.g. "@mysten/dapp-kit/dist/index.css") stay untouched.
+        {
+          find: /^@mysten\/dapp-kit$/,
+          replacement: path.resolve(__dirname, "./src/sandbox/stubs/mysten-dapp-kit.tsx"),
+        },
+        {
+          find: /^wagmi$/,
+          replacement: path.resolve(__dirname, "./src/sandbox/stubs/wagmi.tsx"),
+        },
+        {
+          find: /^@reown\/appkit\/react$/,
+          replacement: path.resolve(__dirname, "./src/sandbox/stubs/reown-appkit-react.tsx"),
+        },
+        {
+          find: /^@reown\/appkit-adapter-wagmi$/,
+          replacement: path.resolve(__dirname, "./src/sandbox/stubs/reown-appkit-adapter-wagmi.ts"),
+        },
+      ],
     },
     build: {
       outDir: "dist", // or set to "/app/dist"

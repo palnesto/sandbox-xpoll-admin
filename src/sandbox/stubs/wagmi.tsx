@@ -2,7 +2,8 @@
 // here every hook resolves against a fixed, already-"connected" address so the Strain
 // Coin Management page's mint/burn/fund/withdraw UI can be exercised with no real wallet
 // or chain. Refined per-call in pages/strain/manage.tsx once that page is wired up.
-import { ReactNode } from "react";
+import { ReactNode, useSyncExternalStore } from "react";
+import { getConnected, setConnected, subscribeConnection } from "./wallet-connection-state";
 
 const SANDBOX_EVM_ADDRESS = "0x1234567890AbcdEF1234567890aBcdEf12345678";
 
@@ -10,12 +11,18 @@ export function WagmiProvider({ children }: { children?: ReactNode }) {
   return <>{children}</>;
 }
 
+// Starts disconnected — the Strain page's "Admin Access Required" lock screen and its
+// "Connect Wallet (Admin)" button are the intended first thing an admin sees. Reown's
+// `open()` stub (see reown-appkit-react.tsx) is what flips this to connected.
 export function useAccount() {
-  return { address: SANDBOX_EVM_ADDRESS, isConnected: true };
+  const isConnected = useSyncExternalStore(subscribeConnection, getConnected, getConnected);
+  return isConnected
+    ? { address: SANDBOX_EVM_ADDRESS as `0x${string}`, isConnected: true as const }
+    : { address: undefined, isConnected: false as const };
 }
 
 export function useDisconnect() {
-  return { disconnect: () => {} };
+  return { disconnect: () => setConnected(false) };
 }
 
 // Mutable chain state so pause/unpause writes are reflected by the next contract read,
